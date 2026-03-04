@@ -169,6 +169,18 @@ def update_vehicles():
         df.sort_values("vin", inplace=True)
         df.to_parquet(f"output/{MODEL}_raw.parquet", index=False)
 
+    # Write the full data to a CSV, dropping media and flattening options.
+    df_full = df.drop(columns=["media"], errors="ignore").copy()
+    if "options" in df_full.columns:
+        df_full["options"] = df_full["options"].apply(
+            lambda opts: " | ".join(
+                item.get("marketingName") or item.get("marketingLongName", "")
+                for item in (opts if isinstance(opts, list) else [])
+                if item.get("marketingName") or item.get("marketingLongName")
+            )
+        )
+    df_full.to_csv(f"output/{MODEL}_full.csv", index=False)
+
     # Add dealer data.
     dealers = pd.read_csv(f"{config.BASE_DIRECTORY}/data/dealers.csv")[
         ["dealerId", "state"]
