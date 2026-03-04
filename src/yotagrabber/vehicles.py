@@ -15,10 +15,14 @@ import requests
 from yotagrabber import config, wafbypass
 
 # Set to True to use local data and skip requests to the Toyota website.
-USE_LOCAL_DATA_ONLY = False
+USE_LOCAL_DATA_ONLY = os.environ.get("USE_LOCAL_DATA", "false").lower() == "true"
 
 # Get the model that we should be searching for.
 MODEL = os.environ.get("MODEL")
+
+# Optional: restrict search to a specific zip code and distance (in miles).
+SEARCH_ZIP = os.environ.get("ZIP_CODE")
+SEARCH_DISTANCE = os.environ.get("DISTANCE", "250")
 
 
 @cache
@@ -34,10 +38,11 @@ def get_vehicles_query(zone="west"):
     }
 
     # Replace certain place holders in the query with values.
-    zip_code = zip_codes[zone]
+    zip_code = SEARCH_ZIP if SEARCH_ZIP else zip_codes[zone]
+    distance = SEARCH_DISTANCE if SEARCH_ZIP else str(5823 + randbelow(1000))
     query = query.replace("ZIPCODE", zip_code)
     query = query.replace("MODELCODE", MODEL)
-    query = query.replace("DISTANCEMILES", str(5823 + randbelow(1000)))
+    query = query.replace("DISTANCEMILES", distance)
     query = query.replace("LEADIDUUID", str(uuid.uuid4()))
 
     return query
@@ -57,12 +62,16 @@ def query_toyota(page_number, query, headers):
     # Make request.
     json_post = {"query": query}
     url = "https://api.search-inventory.toyota.com/graphql"
-    resp = requests.post(
-        url,
-        json=json_post,
-        headers=headers,
-        timeout=15,
-    )
+    try:
+        resp = requests.post(
+            url,
+            json=json_post,
+            headers=headers,
+            timeout=15,
+        )
+    except requests.exceptions.RequestException as exc:
+        print(f"Request failed: {exc}")
+        return None
 
     try:
         result = resp.json()["data"]["locateVehiclesByZip"]
@@ -83,10 +92,15 @@ def get_all_pages():
     df = pd.DataFrame()
     page_number = 1
 
-    # Read the query.
-    west_query = get_vehicles_query(zone="west")
-    central_query = get_vehicles_query(zone="central")
-    east_query = get_vehicles_query(zone="east")
+    # Read the query. If a specific zip is set, only use one zone.
+    if SEARCH_ZIP:
+        queries = {"local": get_vehicles_query(zone="west")}
+    else:
+        queries = {
+            "west": get_vehicles_query(zone="west"),
+            "central": get_vehicles_query(zone="central"),
+            "east": get_vehicles_query(zone="east"),
+        }
 
     # Get headers by bypassing the WAF.
     print("Bypassing WAF")
@@ -113,20 +127,11 @@ def get_all_pages():
         # Get a page of vehicles.
         print(f"Getting page {page_number} of {MODEL} vehicles")
 
-        west_result = query_toyota(page_number, west_query, headers)
-        if west_result and "vehicleSummary" in west_result:
-            print("West:    ", len(west_result["vehicleSummary"]))
-            df = pd.concat([df, pd.json_normalize(west_result["vehicleSummary"])])
-
-        central_result = query_toyota(page_number, central_query, headers)
-        if central_result and "vehicleSummary" in central_result:
-            print("Central: ", len(central_result["vehicleSummary"]))
-            df = pd.concat([df, pd.json_normalize(central_result["vehicleSummary"])])
-
-        east_result = query_toyota(page_number, east_query, headers)
-        if east_result and "vehicleSummary" in east_result:
-            print("East:    ", len(east_result["vehicleSummary"]))
-            df = pd.concat([df, pd.json_normalize(east_result["vehicleSummary"])])
+        for zone_name, zone_query in queries.items():
+            result = query_toyota(page_number, zone_query, headers)
+            if result and "vehicleSummary" in result:
+                print(f"{zone_name.title():10}", len(result["vehicleSummary"]))
+                df = pd.concat([df, pd.json_normalize(result["vehicleSummary"])])
 
         # Drop any duplicate VINs.
         df.drop_duplicates(subset=["vin"], inplace=True)
@@ -184,6 +189,7 @@ def update_vehicles():
         "holdStatus": "Hold Status",
         "year": "Year",
         "drivetrain.code": "Drivetrain",
+        "bed.title": "Bed",
         # "options": "Options",
     }
 
@@ -207,6 +213,7 @@ def update_vehicles():
                 "dealerMarketingName",
                 # "dealerWebsite",
                 "Dealer State",
+                "bed.title",
                 # "options",
             ]
         ]
@@ -255,6 +262,7 @@ def update_vehicles():
         [
             "Year",
             "Model",
+            "Bed",
             "Color",
             "Base MSRP",
             "Markup",

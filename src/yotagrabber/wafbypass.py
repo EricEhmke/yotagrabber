@@ -7,7 +7,7 @@ class WAFBypass:
 
     def intercept_request(self, request):
         """Find the GraphQL request and save the headers."""
-        if request.resource_type == "xhr" and request.url.endswith("/graphql"):
+        if request.resource_type in ("xhr", "fetch") and request.url.endswith("/graphql"):
             self.valid_headers = request.headers
             # Just in case the request JSON is needed later.
             # pprint(request.post_data_json)
@@ -20,11 +20,12 @@ class WAFBypass:
             context = browser.new_context(viewport={"width": 1920, "height": 1080})
             page = context.new_page()
             page.on("request", self.intercept_request)
-            page.goto("https://www.toyota.com/search-inventory/")
-            page.get_by_placeholder("ZIP Code").click()
-            page.get_by_placeholder("ZIP Code").fill("90210")
-            page.get_by_placeholder("ZIP Code").press("Enter")
-            page.wait_for_load_state("networkidle")
+            page.goto(
+                "https://www.toyota.com/search-inventory/model/tacoma/",
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
+            page.wait_for_timeout(15000)
             browser.close()
 
     def run(self):
